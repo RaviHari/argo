@@ -79,7 +79,9 @@ func (d *dagContext) assessDAGPhase(targetTasks []string, nodes map[string]wfv1.
 			unsuccessfulPhase = node.Phase
 		}
 		if node.Type == wfv1.NodeTypeRetry {
-			if hasMoreRetries(&node, d.wf) {
+			if node.Successful() {
+				retriesExhausted = false
+			} else if hasMoreRetries(&node, d.wf) {
 				retriesExhausted = false
 			}
 		}
@@ -106,6 +108,10 @@ func (d *dagContext) assessDAGPhase(targetTasks []string, nodes map[string]wfv1.
 }
 
 func hasMoreRetries(node *wfv1.NodeStatus, wf *wfv1.Workflow) bool {
+	if node.Phase == wfv1.NodeSucceeded {
+		return false
+	}
+
 	if len(node.Children) == 0 {
 		return true
 	}
@@ -227,7 +233,7 @@ func (woc *wfOperationCtx) executeDAGTask(dagCtx *dagContext, taskName string) {
 		depNode := dagCtx.getTaskNode(depName)
 		if depNode != nil {
 			if depNode.Completed() {
-				if !depNode.Successful() {
+				if !depNode.Successful() && !dagCtx.getTask(depName).ContinuesOn(depNode.Phase) {
 					dependenciesSuccessful = false
 				}
 				continue
@@ -374,6 +380,13 @@ func (woc *wfOperationCtx) resolveDependencyReferences(dagCtx *dagContext, task 
 	}
 
 	// Perform replacement
+	// Replace woc.volumes
+	err := woc.substituteParamsInVolumes(scope.replaceMap())
+	if err != nil {
+		return nil, err
+	}
+
+	// Replace task's parameters
 	taskBytes, err := json.Marshal(task)
 	if err != nil {
 		return nil, errors.InternalWrapError(err)
